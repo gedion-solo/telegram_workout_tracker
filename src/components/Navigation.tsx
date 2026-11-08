@@ -22,7 +22,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onTabChange 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 pointer-events-none pb-safe">
       <div className="max-w-md mx-auto px-3.5 pb-2.5 pt-1 pointer-events-auto">
-        <div className="liquid-glass-panel glass-specular rounded-3xl py-1.5 px-2 flex items-center justify-around shadow-2xl">
+        <div className="liquid-glass-panel rounded-3xl py-1.5 px-2 flex items-center justify-around shadow-lg border border-[#8EB69B]/20">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentTab === item.id;

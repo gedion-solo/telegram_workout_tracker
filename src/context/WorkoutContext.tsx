@@ -14,6 +14,17 @@ import {
   SplitCategory,
 } from '../types/workout';
 import { DEFAULT_EXERCISES, WORKOUT_TEMPLATES, SEED_COMPLETED_WORKOUTS } from '../data/seedData';
+import { TelegramUser, getTelegramUser, initTelegramApp } from '../utils/telegram';
+import {
+  isSupabaseConfigured,
+  syncUserProfile,
+  fetchUserDataFromSupabase,
+  saveSessionToSupabase,
+  deleteSessionFromSupabase,
+  saveTemplateToSupabase,
+  deleteTemplateFromSupabase,
+  saveCustomExerciseToSupabase,
+} from '../lib/supabase';
 
 const STORAGE_KEYS = {
   EXERCISES: 'duofit_exercises_v2',
@@ -40,6 +51,8 @@ interface FinishedWorkoutSummary {
 }
 
 interface WorkoutContextType {
+  telegramUser: TelegramUser;
+  cloudSyncStatus: 'synced' | 'syncing' | 'offline' | 'error';
   exercises: Exercise[];
   history: CompletedWorkout[];
   templates: WorkoutTemplate[];
@@ -125,6 +138,12 @@ export const calculateWarmupSuggestions = (workingWeight: number): WarmupSetPlan
 };
 
 export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // 0. Telegram User & Cloud Sync state
+  const [telegramUser, setTelegramUser] = useState<TelegramUser>(() => getTelegramUser());
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>(
+    () => (isSupabaseConfigured ? 'syncing' : 'offline')
+  );
+
   // 1. Exercises state
   const [exercises, setExercises] = useState<Exercise[]>(() => {
     try {
@@ -184,6 +203,70 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // 5. Finished summary celebration modal state
   const [finishedSummary, setFinishedSummary] = useState<FinishedWorkoutSummary | null>(null);
 
+  // Initial mount: Telegram WebApp expand + Supabase Cloud Load
+  useEffect(() => {
+    initTelegramApp();
+
+    const syncUserAndData = () => {
+      const user = getTelegramUser();
+      setTelegramUser(user);
+
+      if (!isSupabaseConfigured) {
+        setCloudSyncStatus('offline');
+        return;
+      }
+
+      setCloudSyncStatus('syncing');
+      syncUserProfile(user, 'Custom');
+
+      fetchUserDataFromSupabase(user.id)
+        .then((remoteData) => {
+          if (!remoteData) {
+            setCloudSyncStatus('offline');
+            return;
+          }
+          setCloudSyncStatus('synced');
+
+          // 1. History
+          if (remoteData.sessions && remoteData.sessions.length > 0) {
+            setHistory(remoteData.sessions);
+          }
+
+          // 2. Custom Templates
+          if (remoteData.templates && remoteData.templates.length > 0) {
+            setTemplates((prev) => {
+              const remoteIds = new Set(remoteData.templates!.map((t) => t.id));
+              const filteredDefaults = prev.filter((p) => !remoteIds.has(p.id));
+              return [...remoteData.templates!, ...filteredDefaults];
+            });
+          }
+
+          // 3. Custom Exercises
+          if (remoteData.customExercises && remoteData.customExercises.length > 0) {
+            setExercises((prev) => {
+              const remoteIds = new Set(remoteData.customExercises!.map((e) => e.id));
+              const base = prev.filter((e) => !remoteIds.has(e.id));
+              return [...base, ...remoteData.customExercises!];
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn('Supabase initial fetch failed:', err);
+          setCloudSyncStatus('error');
+        });
+    };
+
+    syncUserAndData();
+
+    // Secondary pass in case window.Telegram.WebApp was injected asynchronously by Telegram
+    const timer = setTimeout(() => {
+      initTelegramApp();
+      syncUserAndData();
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, []);
+
   // Persistence effects
   useEffect(() => {
     try {
@@ -232,7 +315,7 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (typeof window !== 'undefined' && 'navigator' in window && 'vibrate' in navigator) {
             try {
               navigator.vibrate([100, 50, 100]);
-            } catch (_) {}
+            } catch (_) { }
           }
           return { ...prev, active: false, secondsRemaining: 0 };
         }
@@ -340,9 +423,10 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
 
       setTemplates((prev) => [newTemplate, ...prev]);
+      saveTemplateToSupabase(telegramUser.id, newTemplate);
       return newTemplate;
     },
-    []
+    [telegramUser.id]
   );
 
   const saveActiveWorkoutAsTemplate = useCallback(
@@ -351,8 +435,12 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const name = (customName && customName.trim()) || activeSession.name || 'My Routine';
       const exerciseIds = activeSession.exercises.map((e) => e.exerciseId);
 
-      const newTemplate: WorkoutTemplate = {
-        id: `template-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      const existing = templates.find(
+        (t) => t.id === activeSession.templateId || t.name.toLowerCase() === name.toLowerCase()
+      );
+
+      const templateToSave: WorkoutTemplate = {
+        id: existing?.id || `template-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         name,
         category,
         description: description || `Custom routine with ${exerciseIds.length} exercises`,
@@ -360,25 +448,28 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
 
       setTemplates((prev) => {
-        const existingIdx = prev.findIndex(
-          (t) => t.id === activeSession.templateId || t.name.toLowerCase() === name.toLowerCase()
-        );
+        const existingIdx = prev.findIndex((t) => t.id === templateToSave.id);
         if (existingIdx >= 0) {
           const updated = [...prev];
-          updated[existingIdx] = { ...updated[existingIdx], name, exerciseIds };
+          updated[existingIdx] = templateToSave;
           return updated;
         }
-        return [newTemplate, ...prev];
+        return [templateToSave, ...prev];
       });
 
-      return newTemplate;
+      saveTemplateToSupabase(telegramUser.id, templateToSave);
+      return templateToSave;
     },
-    [activeSession]
+    [activeSession, templates, telegramUser.id]
   );
 
-  const deleteTemplate = useCallback((templateId: string) => {
-    setTemplates((prev) => prev.filter((t) => t.id !== templateId));
-  }, []);
+  const deleteTemplate = useCallback(
+    (templateId: string) => {
+      setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+      deleteTemplateFromSupabase(telegramUser.id, templateId);
+    },
+    [telegramUser.id]
+  );
 
   const cancelWorkout = useCallback(() => {
     setActiveSession(null);
@@ -726,43 +817,46 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     // Auto-save or update routine template with completed exercises for future workouts!
     const currentExIds = activeSession.exercises.map((e) => e.exerciseId);
+    let templateToSync: WorkoutTemplate | null = null;
     if (currentExIds.length > 0) {
-      setTemplates((prev) => {
-        const existingIdx = prev.findIndex(
-          (t) => (activeSession.templateId && t.id === activeSession.templateId) ||
-                 t.name.toLowerCase() === activeSession.name.toLowerCase()
-        );
-        if (existingIdx >= 0) {
-          const updated = [...prev];
-          updated[existingIdx] = {
-            ...updated[existingIdx],
-            exerciseIds: Array.from(new Set([...updated[existingIdx].exerciseIds, ...currentExIds])),
-          };
-          return updated;
-        } else if (activeSession.name && activeSession.name !== 'Quick Workout') {
-          const newTpl: WorkoutTemplate = {
-            id: `template-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            name: activeSession.name,
-            category: 'Full Body',
-            description: `Saved routine with ${currentExIds.length} movements`,
-            exerciseIds: currentExIds,
-          };
-          return [newTpl, ...prev];
-        }
-        return prev;
-      });
+      const existing = templates.find(
+        (t) => (activeSession.templateId && t.id === activeSession.templateId) ||
+          t.name.toLowerCase() === activeSession.name.toLowerCase()
+      );
+      if (existing) {
+        templateToSync = {
+          ...existing,
+          exerciseIds: Array.from(new Set([...existing.exerciseIds, ...currentExIds])),
+        };
+        setTemplates((prev) => prev.map((t) => (t.id === existing.id ? templateToSync! : t)));
+      } else if (activeSession.name && activeSession.name !== 'Quick Workout') {
+        templateToSync = {
+          id: `template-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          name: activeSession.name,
+          category: 'Full Body',
+          description: `Saved routine with ${currentExIds.length} movements`,
+          exerciseIds: currentExIds,
+        };
+        setTemplates((prev) => [templateToSync!, ...prev]);
+      }
     }
 
     setHistory((prev) => [newCompletedWorkout, ...prev]);
     setActiveSession(null);
     setRestTimer({ active: false, secondsRemaining: 90, totalSeconds: 90 });
 
+    // Supabase Cloud Sync
+    saveSessionToSupabase(telegramUser.id, newCompletedWorkout);
+    if (templateToSync) {
+      saveTemplateToSupabase(telegramUser.id, templateToSync);
+    }
+
     setFinishedSummary({
       workout: newCompletedWorkout,
       newPRsCount: prsList.length,
       prsList,
     });
-  }, [activeSession, getExerciseById, getExercisePRs]);
+  }, [activeSession, getExerciseById, getExercisePRs, templates, telegramUser.id]);
 
   const clearFinishedSummary = useCallback(() => {
     setFinishedSummary(null);
@@ -847,19 +941,27 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [history]
   );
 
-  const addCustomExercise = useCallback((exercise: Omit<Exercise, 'id'>) => {
-    const newEx: Exercise = {
-      ...exercise,
-      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      isCustom: true,
-    };
-    setExercises((prev) => [...prev, newEx]);
-    return newEx;
-  }, []);
+  const addCustomExercise = useCallback(
+    (exercise: Omit<Exercise, 'id'>) => {
+      const newEx: Exercise = {
+        ...exercise,
+        id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        isCustom: true,
+      };
+      setExercises((prev) => [...prev, newEx]);
+      saveCustomExerciseToSupabase(telegramUser.id, newEx);
+      return newEx;
+    },
+    [telegramUser.id]
+  );
 
-  const deleteWorkoutFromHistory = useCallback((workoutId: string) => {
-    setHistory((prev) => prev.filter((w) => w.id !== workoutId));
-  }, []);
+  const deleteWorkoutFromHistory = useCallback(
+    (workoutId: string) => {
+      setHistory((prev) => prev.filter((w) => w.id !== workoutId));
+      deleteSessionFromSupabase(telegramUser.id, workoutId);
+    },
+    [telegramUser.id]
+  );
 
   const resetAllData = useCallback(() => {
     setExercises(DEFAULT_EXERCISES);
@@ -874,6 +976,8 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const value = useMemo(
     () => ({
+      telegramUser,
+      cloudSyncStatus,
       exercises,
       history,
       templates,
@@ -909,6 +1013,8 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       resetAllData,
     }),
     [
+      telegramUser,
+      cloudSyncStatus,
       exercises,
       history,
       templates,

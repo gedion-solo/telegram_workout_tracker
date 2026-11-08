@@ -73,8 +73,8 @@ export const ExerciseModal: React.FC<ExerciseModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
-      <div className="w-full max-w-md liquid-glass-panel glass-specular rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 animate-fade-in">
+      <div className="w-full max-w-md liquid-glass-panel rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col shadow-xl overflow-hidden border border-[#8EB69B]/20">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">

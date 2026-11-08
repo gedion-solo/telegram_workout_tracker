@@ -19,10 +19,8 @@ export const WorkoutSummaryModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-sm liquid-glass-panel glass-specular border border-emerald-500/40 rounded-3xl p-6 shadow-2xl relative overflow-hidden text-center">
-        {/* Subtle background glow */}
-        <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-48 h-48 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
+      <div className="w-full max-w-sm liquid-glass-panel border border-[#8EB69B]/30 rounded-3xl p-6 shadow-xl relative overflow-hidden text-center">
 
         {/* Trophy icon header */}
         <div className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-emerald-400/10 border border-emerald-500/40 text-emerald-400 mb-4 shadow-lg shadow-emerald-500/20">

@@ -21,7 +21,7 @@ export const RestTimer: React.FC = () => {
   return (
     <div className="fixed bottom-[68px] left-0 right-0 z-30 px-3 pointer-events-none">
       <div className="max-w-md mx-auto pointer-events-auto">
-        <div className="relative overflow-hidden liquid-glass-panel glass-specular border border-emerald-500/35 shadow-2xl backdrop-blur-xl rounded-2xl p-3 text-slate-100 transition-all duration-300">
+        <div className="relative overflow-hidden liquid-glass-panel border border-emerald-500/35 shadow-lg rounded-2xl p-3 text-slate-100">
           {/* Progress bar background fill */}
           <div
             className="absolute left-0 bottom-0 top-0 bg-emerald-500/10 pointer-events-none transition-all duration-1000 ease-linear"

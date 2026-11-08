@@ -24,6 +24,29 @@ import { useWorkout, calculateWarmupSuggestions, WarmupSetPlan } from '../contex
 import { ExerciseModal } from './ExerciseModal';
 import { SetTag, WorkoutSet, SplitCategory, MuscleGroup } from '../types/workout';
 
+// High-performance isolated workout timer component (prevents whole-view re-renders)
+const WorkoutClock: React.FC<{ startTime: number }> = React.memo(({ startTime }) => {
+  const [elapsed, setElapsed] = useState(() => Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+
+  useEffect(() => {
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const formatted = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+
+  return (
+    <div className="flex items-center gap-1 text-xs font-mono font-semibold text-emerald-400">
+      <Clock className="w-3.5 h-3.5" />
+      <span>{formatted}</span>
+    </div>
+  );
+});
+
 export const WorkoutView: React.FC = () => {
   const {
     exercises,
@@ -48,7 +71,6 @@ export const WorkoutView: React.FC = () => {
   } = useWorkout();
 
   const [isExerciseModalOpen, setIsExerciseModalOpen] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   // Dedicated Routine Builder Page State
@@ -99,26 +121,6 @@ export const WorkoutView: React.FC = () => {
   // Manual Warmup Calculator Modal
   const [warmupCalcExId, setWarmupCalcExId] = useState<string | null>(null);
   const [calcInputWeight, setCalcInputWeight] = useState<string>('');
-
-  // Live workout timer
-  useEffect(() => {
-    if (!activeSession) {
-      setElapsedSeconds(0);
-      return;
-    }
-    const updateElapsed = () => {
-      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - activeSession.startTime) / 1000)));
-    };
-    updateElapsed();
-    const interval = setInterval(updateElapsed, 1000);
-    return () => clearInterval(interval);
-  }, [activeSession]);
-
-  const formatTimer = (totalSec: number) => {
-    const mins = Math.floor(totalSec / 60);
-    const secs = totalSec % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
 
   const getTagBadgeStyle = (tag: SetTag) => {
     switch (tag) {
@@ -678,10 +680,7 @@ export const WorkoutView: React.FC = () => {
             )}
 
             <div className="flex items-center gap-2 mt-0.5">
-              <div className="flex items-center gap-1 text-xs font-mono font-semibold text-emerald-400">
-                <Clock className="w-3.5 h-3.5" />
-                <span>{formatTimer(elapsedSeconds)}</span>
-              </div>
+              <WorkoutClock startTime={activeSession.startTime} />
               <span className="text-xs text-slate-500">•</span>
               <span className="text-xs text-slate-400">
                 {activeSession.exercises.length} movement{activeSession.exercises.length !== 1 ? 's' : ''}
@@ -737,7 +736,7 @@ export const WorkoutView: React.FC = () => {
 
       {/* Discard Confirmation Modal */}
       {showDiscardConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
           <div className="w-full max-w-xs bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl text-center">
             <div className="w-12 h-12 rounded-full bg-slate-800 text-slate-300 mx-auto flex items-center justify-center mb-3">
               <AlertCircle className="w-6 h-6" />
@@ -1100,7 +1099,7 @@ export const WorkoutView: React.FC = () => {
 
       {/* Manual Warmup Calculator Modal */}
       {warmupCalcExId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
           <div className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded-3xl p-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
               <div className="flex items-center gap-2">

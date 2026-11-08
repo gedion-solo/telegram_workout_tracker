@@ -84,7 +84,7 @@ interface WorkoutContextType {
   // Exercise CRUD & Helpers
   addCustomExercise: (exercise: Omit<Exercise, 'id'>) => Exercise;
   getExerciseById: (id: string) => Exercise | undefined;
-  getLastPerformance: (exerciseId: string) => CompletedSet[] | null;
+  getLastPerformance: (exerciseId: string, templateIdOrName?: string) => CompletedSet[] | null;
   getExercisePRs: (exerciseId: string) => ExercisePRs;
   getExerciseProgression: (exerciseId: string) => ExerciseProgressionPoint[];
   getExerciseHistoryFeed: (exerciseId: string) => { date: number; workoutName: string; sets: CompletedSet[] }[];
@@ -331,42 +331,69 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [exercises]
   );
 
-  // Retrieve last completed sets for a specific exercise from history
+  // Retrieve last completed sets for a specific exercise from history (prioritizing the same routine)
   const getLastPerformance = useCallback(
-    (exerciseId: string): CompletedSet[] | null => {
-      // Sort history descending by endTime
+    (exerciseId: string, templateIdOrName?: string): CompletedSet[] | null => {
       const sorted = [...history].sort((a, b) => b.endTime - a.endTime);
+
+      // 1. Priority 1: Match by the same routine/template if specified
+      if (templateIdOrName) {
+        const query = templateIdOrName.trim().toLowerCase();
+        for (const workout of sorted) {
+          const isSameRoutine =
+            (workout.templateId && workout.templateId.toLowerCase() === query) ||
+            workout.name.toLowerCase() === query;
+
+          if (isSameRoutine) {
+            const found = workout.exercises.find((e) => e.exerciseId === exerciseId);
+            if (found && found.sets.length > 0) {
+              const validSets = found.sets.filter((s) => (s.weight ?? 0) >= 0 && (s.reps ?? 0) > 0);
+              if (validSets.length > 0) return validSets;
+            }
+          }
+        }
+      }
+
+      // 2. Priority 2: Fallback to the most recent performance in any workout
       for (const workout of sorted) {
         const found = workout.exercises.find((e) => e.exerciseId === exerciseId);
         if (found && found.sets.length > 0) {
-          // filter to completed sets only
-          const completed = found.sets.filter((s) => s.completed);
-          if (completed.length > 0) return completed;
+          const validSets = found.sets.filter((s) => (s.weight ?? 0) >= 0 && (s.reps ?? 0) > 0);
+          if (validSets.length > 0) return validSets;
         }
       }
+
       return null;
     },
     [history]
   );
 
-  // Generate initial sets for an exercise based on previous session ghost values
-  // By default, start with 1 set so the user controls the number of sets on their own!
+  // Generate initial sets for an exercise: exactly reproduces the previous session's sets and adjusted weights!
   const createInitialSetsForExercise = useCallback(
-    (exerciseId: string): WorkoutSet[] => {
-      const prev = getLastPerformance(exerciseId);
-      const prevSet = prev && prev[0] ? prev[0] : null;
+    (exerciseId: string, templateIdOrName?: string): WorkoutSet[] => {
+      const prevSets = getLastPerformance(exerciseId, templateIdOrName);
 
-      return [
-        {
-          id: `set-${Date.now()}-0-${Math.random().toString(36).substring(2, 6)}`,
-          tag: 'N',
-          weight: null,
-          reps: null,
-          completed: false,
-          previousWeight: prevSet ? prevSet.weight : undefined,
-          previousReps: prevSet ? prevSet.reps : undefined,
-        },
-      ];
+      if (prevSets && prevSets.length > 0) {
+        return prevSets.map((prevSet, idx) => ({
+          id: `set-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+          tag: prevSet.tag || 'N',
+          // Exactly preserve the kg and reps from the last workout!
+          weight: prevSet.weight !== undefined ? prevSet.weight : null,
+          reps: prevSet.reps !== undefined ? prevSet.reps : null,
+          completed: false, // Clean checkmark for the new workout
+          previousWeight: prevSet.weight,
+          previousReps: prevSet.reps,
+        }));
+      }
+
+      // Default to 3 clean working sets if this exercise was never logged before
+      return [0, 1, 2].map((idx) => ({
+        id: `set-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+        tag: 'N' as SetTag,
+        weight: null,
+        reps: null,
+        completed: false,
+      }));
     },
     [getLastPerformance]
   );
@@ -388,7 +415,7 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const activeExercises: ActiveExercise[] = exerciseIds.map((exId, idx) => ({
         id: `act-ex-${Date.now()}-${idx}`,
         exerciseId: exId,
-        sets: createInitialSetsForExercise(exId),
+        sets: createInitialSetsForExercise(exId, templateId || name),
       }));
 
       const newSession: ActiveWorkoutSession = {
@@ -482,7 +509,7 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const newActiveExercise: ActiveExercise = {
         id: `act-ex-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         exerciseId,
-        sets: createInitialSetsForExercise(exerciseId),
+        sets: createInitialSetsForExercise(exerciseId, activeSession.templateId || activeSession.name),
       };
       setActiveSession({
         ...activeSession,
@@ -514,8 +541,9 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const newSet: WorkoutSet = {
             id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             tag: lastSet ? (lastSet.tag === 'W' ? 'N' : lastSet.tag) : 'N',
-            weight: null,
-            reps: null,
+            // Pre-fill with the previous set's weight and reps so the user doesn't have to re-enter them!
+            weight: lastSet?.weight ?? lastSet?.previousWeight ?? null,
+            reps: lastSet?.reps ?? lastSet?.previousReps ?? null,
             completed: false,
             previousWeight: lastSet?.weight ?? lastSet?.previousWeight,
             previousReps: lastSet?.reps ?? lastSet?.previousReps,
@@ -758,14 +786,23 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
         let maxE1RMInSession = 0;
 
         const completedSets: CompletedSet[] = ex.sets
-          .filter((s) => s.completed && (s.weight ?? 0) > 0 && (s.reps ?? 0) > 0)
+          .filter((s) => {
+            const hasValidNumbers =
+              s.weight !== null &&
+              s.weight !== undefined &&
+              s.weight >= 0 &&
+              s.reps !== null &&
+              s.reps !== undefined &&
+              s.reps > 0;
+            return s.completed || hasValidNumbers;
+          })
           .map((s) => {
-            const weight = s.weight || 0;
-            const reps = s.reps || 0;
+            const weight = s.weight !== null && s.weight !== undefined ? s.weight : (s.previousWeight ?? 0);
+            const reps = s.reps !== null && s.reps !== undefined ? s.reps : (s.previousReps ?? 0);
             totalVolume += weight * reps;
 
             let isPR = false;
-            if (s.tag !== 'W') {
+            if (s.tag !== 'W' && weight > 0 && reps > 0) {
               const currentE1RM = calculateE1RM(weight, reps);
               if (weight > existingPRs.heaviestWeight && weight > maxWeightInSession) {
                 isPR = true;
@@ -806,6 +843,7 @@ export const WorkoutProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const newCompletedWorkout: CompletedWorkout = {
       id: `workout-${Date.now()}`,
+      templateId: activeSession.templateId,
       name: activeSession.name,
       startTime: activeSession.startTime,
       endTime,

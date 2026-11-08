@@ -55,6 +55,7 @@ export interface CompletedExercise {
 
 export interface CompletedWorkout {
   id: string;
+  templateId?: string;
   name: string;
   startTime: number;
   endTime: number;
